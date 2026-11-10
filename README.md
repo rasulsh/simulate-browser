@@ -129,10 +129,11 @@ major version when you can.
   The saved HTML matched the default price/offer pattern (`"offers"`, `"price"`,
   toman/rial).
 
-- **Fingerprint vs real Chrome (2026-11-10):** `scripts/fingerprint.sh` was run
-  with no proxy against `tls.peet.ws/api/all`, compared with a reference saved
-  from a real Chrome 157 on Windows (page navigation). The tool's profile is
-  `Chrome_152`, the newest profile in tls-client v1.18.0.
+- **Fingerprint: verified for the Chrome 152 profile vs Chrome 157 on Windows,
+  single run (2026-11-10).** `scripts/fingerprint.sh` was run with no proxy against
+  `tls.peet.ws/api/all` and compared with a reference saved from a real Chrome 157
+  on Windows (page navigation). The tool's profile is `Chrome_152`, the newest
+  profile in tls-client v1.18.0.
 
   | Field | Result |
   |-------|--------|
@@ -140,22 +141,24 @@ major version when you can.
   | HTTP/2 Akamai fingerprint: `1:65536;2:0;4:6291456;6:262144\|15663105\|0\|m,a,s,p` | MATCH |
   | HTTP/2 pseudo-header order (`:method,:authority,:scheme,:path`) | MATCH |
   | Header order, common headers only | MATCH |
-  | Header order, strict | MISMATCH: the `priority` header was missing; **fixed** (see below) |
+  | Header order, strict | MATCH after the `priority` fix (first run: MISMATCH, `priority` missing) |
   | JA3, User-Agent | differ as expected (extension shuffling; Chrome 152 vs 157) |
 
   The 152 vs 157 version gap did not change JA4 or the HTTP/2 fingerprint. The one
   mismatch was a real defect, not a version or OS effect: `priority` was in the
   header order list but never given a value, so it was never sent. It now sends
-  `priority: u=0, i`, as Chrome does on navigations. The fix has not been re-run
-  against the endpoint yet (expected: strict header order now MATCH).
+  `priority: u=0, i`, as Chrome does on navigations. A re-run after the fix exited 0
+  with no MISMATCH (reported by the author; the log was not attached to the PR).
 
 ### Not independently verified
 
-- **Fingerprint: partly verified.** The comparison above shows JA4 and the HTTP/2
-  fingerprint equal to a real Chrome, but it was one run against one reference
-  (Chrome 157 on Windows; the OS the tool itself ran on was not recorded). Still open: the
-  `priority` fix needs one re-run of `scripts/fingerprint.sh`, other OSes, and
-  other Chrome versions (the profile is pinned to 152).
+- **Fingerprint: limits of the verification above.**
+  - One run against one reference (Chrome 157 on Windows); the OS the tool itself
+    ran on was not recorded.
+  - Other operating systems (macOS, Linux, Android) are untested.
+  - Other Chrome versions are untested: the profile is pinned to `Chrome_152`, the
+    newest in tls-client v1.18.0, so a Chrome that has moved on may diverge
+    (JA4 and HTTP/2 settings do change between Chrome releases).
 - **Price extraction is not checked.** Success means "real page, not a challenge,
   and price/offer-like content present". The tool does not parse or validate the
   actual price value.
