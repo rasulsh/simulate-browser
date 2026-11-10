@@ -129,14 +129,33 @@ major version when you can.
   The saved HTML matched the default price/offer pattern (`"offers"`, `"price"`,
   toman/rial).
 
+- **Fingerprint vs real Chrome (2026-11-10):** `scripts/fingerprint.sh` was run
+  with no proxy against `tls.peet.ws/api/all`, compared with a reference saved
+  from a real Chrome 157 on Windows (page navigation). The tool's profile is
+  `Chrome_152`, the newest profile in tls-client v1.18.0.
+
+  | Field | Result |
+  |-------|--------|
+  | JA4 (full and parts a/b/c): `t13d1517h2_8daaf6152771_cb7bf5808d99` | MATCH |
+  | HTTP/2 Akamai fingerprint: `1:65536;2:0;4:6291456;6:262144\|15663105\|0\|m,a,s,p` | MATCH |
+  | HTTP/2 pseudo-header order (`:method,:authority,:scheme,:path`) | MATCH |
+  | Header order, common headers only | MATCH |
+  | Header order, strict | MISMATCH: the `priority` header was missing; **fixed** (see below) |
+  | JA3, User-Agent | differ as expected (extension shuffling; Chrome 152 vs 157) |
+
+  The 152 vs 157 version gap did not change JA4 or the HTTP/2 fingerprint. The one
+  mismatch was a real defect, not a version or OS effect: `priority` was in the
+  header order list but never given a value, so it was never sent. It now sends
+  `priority: u=0, i`, as Chrome does on navigations. The fix has not been re-run
+  against the endpoint yet (expected: strict header order now MATCH).
+
 ### Not independently verified
 
-- **The TLS / JA3 / JA4 / HTTP/2 fingerprint layer is still not validated in
-  isolation.** `scripts/fingerprint.sh` (see "Fingerprint check") exists to do this,
-  but it has not been run against the real endpoint yet. The `http` mode getting
-  through unproxied is good indirect evidence that the fingerprint is accepted, but
-  the exact fingerprint stays unverified until the script is run from a direct
-  connection and compared against a real Chrome capture.
+- **Fingerprint: partly verified.** The comparison above shows JA4 and the HTTP/2
+  fingerprint equal to a real Chrome, but it was one run against one reference
+  (Chrome 157 on Windows; the OS the tool itself ran on was not recorded). Still open: the
+  `priority` fix needs one re-run of `scripts/fingerprint.sh`, other OSes, and
+  other Chrome versions (the profile is pinned to 152).
 - **Price extraction is not checked.** Success means "real page, not a challenge,
   and price/offer-like content present". The tool does not parse or validate the
   actual price value.
