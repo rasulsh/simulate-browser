@@ -61,16 +61,46 @@ Run it from a network the target accepts (for torob.com: an Iranian IP).
 
 ## Verification status
 
-- **Verified in the development sandbox:** build, unit/integration tests,
-  redirects, cookies, header handling, JS challenge solving with headless Chrome,
-  and real fetches of a reachable HTTPS site in all three modes.
-- **TLS / JA3 / JA4 / HTTP/2 fingerprint layer: implemented but unverified.**
-  The sandbox re-terminates TLS in an egress proxy (certificates are issued by
-  `CCR agent-proxy interception CA`), so the target never sees this tool's
-  ClientHello and the fingerprint cannot be validated there. Check it against a
-  fingerprint echo service from a direct connection.
-- **torob.com: NOT verified.** From the sandbox, `torob.com` is allowed by the
-  network policy but the connection is reset during the TLS handshake
-  (`502 upstream request failed` through the proxy), consistent with IP/geo
-  blocking of datacenter or non-Iranian addresses. This is an environment
-  limitation, not a result. Run `scripts/verify.sh` from an accepted network.
+### Verified
+
+- **Sandbox (development environment):** build, unit/integration tests, redirects,
+  cookies, header handling, JavaScript challenge solving with headless Chrome, and
+  real fetches of a reachable HTTPS site in all three modes.
+- **Real target, torob.com (2026-11-10):** `scripts/verify.sh` was run from a
+  residential connection in Germany with no proxy (Go 1.27.0, Chrome 157), against
+  a torob.com product page. All three modes succeeded:
+
+  | mode | status | HTML size | challenge | result |
+  |------|--------|-----------|-----------|--------|
+  | `http`    | 200 | 174,298 bytes | no | OK |
+  | `browser` | 200 | 358,613 bytes | no | OK |
+  | `auto`    | 200 | 174,298 bytes | no | OK, succeeded in `http` mode (no fallback needed) |
+
+  The final URL matched the requested URL and the `<title>` was the real product
+  title ("خرید و قیمت دیسک بازی FC 26 برای پلی استیشن 5 | ترب"), not a block page.
+  The saved HTML matched the default price/offer pattern (`"offers"`, `"price"`,
+  toman/rial).
+
+### Not independently verified
+
+- **The TLS / JA3 / JA4 / HTTP/2 fingerprint layer is still not validated in
+  isolation.** The `http` mode getting through unproxied is good indirect
+  evidence that the fingerprint is accepted, but the exact fingerprint was never
+  compared against a reference (for example a fingerprint echo service against a
+  real Chrome capture).
+- **Price extraction is not checked.** Success means "real page, not a challenge,
+  and price/offer-like content present". The tool does not parse or validate the
+  actual price value.
+- **Single run, single IP.** One run from one residential German IP says nothing
+  about stability over time, rate limits, or other networks. Challenge behavior
+  can change; `auto` mode exists for that reason.
+- **Iranian IPs were not tested.**
+
+### Known environment limitation
+
+From the cloud development sandbox (a datacenter IP behind a TLS-intercepting egress
+proxy), `torob.com` resets the connection during the TLS handshake. The German
+residential run above shows the site is not blocked for non-Iranian IPs in general,
+so that failure is specific to the sandbox's IP or network (most likely
+datacenter-IP reputation). It is not a defect in this tool. Run
+`scripts/verify.sh` from a residential or otherwise accepted network.
