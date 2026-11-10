@@ -1,0 +1,187 @@
+name: release
+
+# - push of a v*.*.* tag (also v1.2.3-rc.1): build, compatibility tests, GitHub Release
+# - pull_request / workflow_dispatch: build + compatibility tests only, no release
+on:
+  push:
+    tags: ["v*.*.*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # Tag name on a tag build, "dev" otherwise (so --version prints "dev").
+  VERSION: ${{ github.ref_type == 'tag' && github.ref_name || 'dev' }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        goarch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Unit tests
+        if: matrix.goarch == 'amd64'
+        run: |
+          go vet ./...
+          go test ./...
+
+      - name: Build static binary
+        env:
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          set -euo pipefail
+          date_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          mkdir -p dist/stage
+          CGO_ENABLED=0 GOOS=linux go build -trimpath -tags netgo,osusergo \
+            -ldflags "-s -w -X main.version=${VERSION} -X main.commit=${GITHUB_SHA::7} -X main.date=${date_utc}" \
+            -o dist/stage/simulate-browser .
+
+      - name: Verify the binary is fully static
+        env:
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          set -euo pipefail
+          out=$(file dist/stage/simulate-browser)
+          echo "$out"
+          echo "$out" | grep -q 'statically linked'
+          if [ "$GOARCH" = amd64 ]; then
+            # ldd exits non-zero for static binaries, so capture the text first.
+            out=$(ldd dist/stage/simulate-browser 2>&1 || true)
+            echo "$out"
+            echo "$out" | grep -q 'not a dynamic executable'
+            dist/stage/simulate-browser --version
+          fi
+
+      - name: Package
+        env:
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          set -euo pipefail
+          for f in README.md LICENSE; do
+            if [ -f "$f" ]; then cp "$f" dist/stage/; fi
+          done
+          files=$(cd dist/stage && ls)
+          tar --owner=0 --group=0 -C dist/stage -czf "dist/simulate-browser_${VERSION}_linux_${GOARCH}.tar.gz" $files
+          tar -tzvf "dist/simulate-browser_${VERSION}_linux_${GOARCH}.tar.gz"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pkg-${{ matrix.goarch }}
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  # Runs the packaged binary in clean containers that have no Go installed.
+  compat:
+    needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # amd64. centos:7 (glibc 2.17) stands in for CloudLinux 7, almalinux:8/9 for CloudLinux 8/9.
+          - { arch: amd64, image: "centos:7" }
+          - { arch: amd64, image: "almalinux:8" }
+          - { arch: amd64, image: "almalinux:9" }
+          - { arch: amd64, image: "ubuntu:20.04", prep: "apt-get update -qq && apt-get install -y -qq ca-certificates" }
+          - { arch: amd64, image: "ubuntu:24.04", prep: "apt-get update -qq && apt-get install -y -qq ca-certificates" }
+          - { arch: amd64, image: "debian:12", prep: "apt-get update -qq && apt-get install -y -qq ca-certificates" }
+          - { arch: amd64, image: "alpine:latest" }
+          # arm64 under QEMU emulation.
+          - { arch: arm64, image: "ubuntu:24.04", prep: "apt-get update -qq && apt-get install -y -qq ca-certificates" }
+          - { arch: arm64, image: "almalinux:9" }
+    steps:
+      - uses: docker/setup-qemu-action@v3
+        if: matrix.arch == 'arm64'
+        with:
+          platforms: arm64
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: pkg-${{ matrix.arch }}
+          path: pkg
+
+      - name: Extract binary
+        run: |
+          mkdir bin
+          tar -xzf pkg/*.tar.gz -C bin
+          chmod +x bin/simulate-browser
+
+      - name: Write container test script
+        run: |
+          cat > "$RUNNER_TEMP/compat.sh" <<'EOF'
+          set -eu
+          # PREP (optional) installs ca-certificates on images that ship without a CA bundle.
+          if [ -n "${PREP:-}" ]; then sh -c "$PREP" > /dev/null; fi
+          head -n 2 /etc/os-release
+          for f in /etc/ssl/certs/ca-certificates.crt /etc/pki/tls/certs/ca-bundle.crt; do
+            if [ -e "$f" ]; then echo "CA bundle: $f"; fi
+          done
+
+          echo "--- --version"
+          simulate-browser --version
+          simulate-browser --version | grep -q "$EXPECT_VERSION"
+
+          echo "--- browser mode without Chrome must fail with a clear message"
+          if out=$(simulate-browser -mode browser -url https://github.com/ 2>&1); then
+            echo "browser mode unexpectedly succeeded"; exit 1
+          fi
+          echo "$out"
+          echo "$out" | grep -q "no Chrome/Chromium binary found"
+
+          echo "--- real HTTPS fetch, http mode (DNS + system CA bundle)"
+          simulate-browser -mode http -url https://github.com/ -expect GitHub -out /tmp/page.html
+
+          echo "--- auto mode without Chrome: warning, then http only"
+          simulate-browser -mode auto -url https://github.com/ -expect GitHub -out /tmp/page.html 2> /tmp/auto.err
+          cat /tmp/auto.err
+          grep -q "WARNING" /tmp/auto.err
+          EOF
+
+      - name: Test in ${{ matrix.image }} (${{ matrix.arch }})
+        env:
+          PREP: ${{ matrix.prep }}
+          EXPECT_VERSION: ${{ env.VERSION }}
+        run: |
+          docker run --rm --platform "linux/${{ matrix.arch }}" \
+            -e PREP -e EXPECT_VERSION \
+            -v "$PWD/bin/simulate-browser:/usr/local/bin/simulate-browser:ro" \
+            -v "$RUNNER_TEMP/compat.sh:/compat.sh:ro" \
+            "${{ matrix.image }}" sh /compat.sh
+
+  release:
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    needs: [build, compat]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: pkg-*
+          path: assets
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          cd assets
+          sha256sum *.tar.gz > SHA256SUMS
+          cat SHA256SUMS
+          flags=()
+          # A hyphen in the tag (v1.2.3-rc.1) marks a pre-release.
+          case "$TAG" in *-*) flags+=(--prerelease) ;; esac
+          gh release create "$TAG" ./*.tar.gz SHA256SUMS \
+            --repo "$GITHUB_REPOSITORY" --title "$TAG" --generate-notes --verify-tag "${flags[@]}"

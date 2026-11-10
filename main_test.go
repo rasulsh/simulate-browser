@@ -142,3 +142,29 @@ func TestAutoEndToEndFallback(t *testing.T) {
 		t.Fatal("auto mode should succeed through the browser")
 	}
 }
+
+func TestFindChromeRejectsBadChromePath(t *testing.T) {
+	t.Setenv("CHROME_PATH", "/nonexistent/chrome")
+	if p, err := findChrome(); err == nil {
+		t.Fatalf("expected an error, got %q", p)
+	}
+}
+
+func TestFindChromeMessageWhenMissing(t *testing.T) {
+	t.Setenv("CHROME_PATH", "")
+	t.Setenv("PATH", t.TempDir())
+	_, err := findChrome()
+	if err == nil || !strings.Contains(err.Error(), "no Chrome/Chromium binary found") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+// Auto mode without a browser (nil fetcher) must still work using http only.
+func TestAutoWithoutBrowserUsesHTTPOnly(t *testing.T) {
+	srv := testServer()
+	defer srv.Close()
+	c := testConfig(t, srv.URL+"/start", "auto")
+	if !run(context.Background(), c, fetchHTTP, nil) {
+		t.Fatal("auto mode should succeed with http only")
+	}
+}
