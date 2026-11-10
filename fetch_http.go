@@ -60,6 +60,7 @@ func fetchHTTP(ctx context.Context, url, lang, proxy string, timeout time.Durati
 		"sec-fetch-dest":            {"document"},
 		"accept-encoding":           {"gzip, deflate, br, zstd"},
 		"accept-language":           {lang},
+		"priority":                  {"u=0, i"}, // Chrome sends this on top-level navigations
 		http.HeaderOrderKey: {
 			"sec-ch-ua", "sec-ch-ua-mobile", "sec-ch-ua-platform", "upgrade-insecure-requests",
 			"user-agent", "accept", "sec-fetch-site", "sec-fetch-mode", "sec-fetch-user",

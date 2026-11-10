@@ -75,7 +75,8 @@ func testServer() *httptest.Server {
 			w.WriteHeader(http.StatusForbidden)
 			return
 		}
-		if !strings.Contains(r.UserAgent(), "Chrome/") || r.Header.Get("Sec-Fetch-Mode") != "navigate" {
+		if !strings.Contains(r.UserAgent(), "Chrome/") || r.Header.Get("Sec-Fetch-Mode") != "navigate" ||
+			r.Header.Get("Priority") != "u=0, i" {
 			w.WriteHeader(http.StatusForbidden)
 			return
 		}
