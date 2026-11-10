@@ -1,1 +1,4 @@
 simulate-browser
+page.html
+verify-out/
+*.html
