@@ -8,7 +8,16 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"runtime"
 	"time"
+)
+
+// Set at build time with -ldflags "-X main.version=... -X main.commit=... -X main.date=...".
+// A plain `go build` leaves version as "dev".
+var (
+	version = "dev"
+	commit  = "unknown"
+	date    = "unknown"
 )
 
 type fetcher func(ctx context.Context, url, lang, proxy string, timeout time.Duration) (*Result, error)
@@ -29,7 +38,14 @@ func main() {
 	flag.StringVar(&c.proxy, "proxy", os.Getenv("HTTPS_PROXY"), "proxy URL (default: $HTTPS_PROXY)")
 	flag.StringVar(&expect, "expect", defaultExpect, "regexp the HTML must match to count as real content")
 	flag.DurationVar(&c.timeout, "timeout", 60*time.Second, "per-strategy timeout")
+	showVersion := flag.Bool("version", false, "print version information and exit")
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Printf("simulate-browser %s\ncommit:     %s\nbuilt:      %s\ngo version: %s\nos/arch:    %s/%s\n",
+			version, commit, date, runtime.Version(), runtime.GOOS, runtime.GOARCH)
+		return
+	}
 
 	if c.url == "" || (c.mode != "auto" && c.mode != "http" && c.mode != "browser") {
 		flag.Usage()
@@ -42,7 +58,20 @@ func main() {
 	}
 	c.expect = re
 
-	if !run(context.Background(), c, fetchHTTP, fetchBrowser) {
+	// Without Chrome, browser mode cannot work and auto mode degrades to http only.
+	browserF := fetcher(fetchBrowser)
+	if _, err := findChrome(); err != nil {
+		switch c.mode {
+		case "browser":
+			fmt.Fprintln(os.Stderr, "error:", err)
+			os.Exit(1)
+		case "auto":
+			fmt.Fprintf(os.Stderr, "WARNING: %v; auto mode will use http only (no browser fallback)\n", err)
+			browserF = nil
+		}
+	}
+
+	if !run(context.Background(), c, fetchHTTP, browserF) {
 		os.Exit(1)
 	}
 }
@@ -67,7 +96,9 @@ func run(ctx context.Context, c config, httpF, browserF fetcher) bool {
 		add("browser", browserF)
 	default:
 		add("http", httpF)
-		add("browser", browserF)
+		if browserF != nil {
+			add("browser", browserF)
+		}
 	}
 
 	var last *Result

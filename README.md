@@ -24,13 +24,99 @@ Flags: `-url` (required), `-mode auto|http|browser`, `-out` (default `page.html`
 It prints evidence (mode, status code, final URL, HTML size, `<title>`, challenge
 flag) and exits 0 only if the saved HTML is real content, not a challenge/block page.
 
-Requirements: Go (the `go` directive in `go.mod` may make Go download a newer
-toolchain automatically) and, for `browser`/`auto`, Chrome or Chromium
-(`google-chrome`, `chromium`, or `CHROME_PATH`).
+Requirements to build: Go (the `go` directive in `go.mod` may make Go download a newer
+toolchain automatically). Requirements to run: see [Releases](#releases);
+`browser` mode needs Chrome or Chromium (`google-chrome`, `chromium`, or `CHROME_PATH`).
+`./simulate-browser --version` prints the build version.
+
+## Releases
+
+Releases are built by `.github/workflows/release.yml` (static Linux binaries for
+amd64 and arm64, no Go needed on the server).
+
+### Creating a release
+
+```bash
+git checkout main && git pull
+git tag v1.2.3            # pre-release: v1.2.3-rc.1 (any tag with a hyphen)
+git push origin v1.2.3
+```
+
+Pushing a `v*.*.*` tag builds both binaries, runs the compatibility tests in clean
+containers and, only if they all pass, creates the GitHub Release (with generated
+notes). Tags containing a hyphen are published as pre-releases. Pull requests and
+manual runs (`workflow_dispatch`) build and test but never release.
+
+Watch the build:
+
+```bash
+gh run list --workflow release.yml
+gh run watch                          # pick the run
+gh run view --log-failed              # logs of failed steps
+```
+
+### Installing on a server
+
+```bash
+uname -m        # x86_64 -> amd64, aarch64 -> arm64
+TAG=v1.2.3 ARCH=amd64
+BASE=https://github.com/rasulsh/simulate-browser/releases/download/$TAG
+curl -fsSLO $BASE/simulate-browser_${TAG}_linux_${ARCH}.tar.gz
+curl -fsSLO $BASE/SHA256SUMS
+sha256sum -c SHA256SUMS --ignore-missing      # must print: ...: OK
+mkdir simulate-browser && tar -xzf simulate-browser_${TAG}_linux_${ARCH}.tar.gz -C simulate-browser
+chmod +x simulate-browser/simulate-browser
+./simulate-browser/simulate-browser --version # prints version, commit, build date, Go version, os/arch
+```
+
+A build that is not a release prints `dev` as its version.
+
+### Runtime requirements
+
+The binary is fully static (`CGO_ENABLED=0`, `netgo`, `osusergo`): no glibc version
+requirement, so it runs on old and musl-based systems alike.
+
+- **`http` mode** needs nothing except a CA certificate bundle (`ca-certificates`).
+  Debian/Ubuntu container images ship without one; install it
+  (`apt-get install ca-certificates`). Full VMs and AlmaLinux/CentOS images have it.
+- **`browser` mode** needs Chrome or Chromium on the server; it cannot be bundled.
+  The tool looks for `google-chrome`, `google-chrome-stable`, `chromium`,
+  `chromium-browser` or `chrome` in `$PATH`, or uses `$CHROME_PATH`. Without one,
+  `-mode browser` exits 1 with `no Chrome/Chromium binary found ...`.
+- **`auto` mode** without Chrome still works: it prints a `WARNING` and uses `http` only
+  (no browser fallback).
+- **Sandbox:** Chrome refuses to start as root without `--no-sandbox` (checked
+  with Chromium). The tool therefore adds `--no-sandbox` only when running as root. As a
+  normal user the sandbox stays on; if it cannot start there (for example a kernel with
+  unprivileged user namespaces disabled, as on stock CentOS 7/CloudLinux 7), set
+  `SIMULATE_BROWSER_NO_SANDBOX=1`.
+
+### Tested distributions
+
+Every PR and tag run executes the packaged binary in clean containers (no Go installed):
+`--version`, `-mode browser` without Chrome (must fail clearly), a real HTTPS fetch of
+`https://github.com/` in `http` mode, and `auto` mode (warning, then http only).
+
+| Arch | Images |
+|------|--------|
+| amd64 | `centos:7`, `almalinux:8`, `almalinux:9`, `ubuntu:20.04`, `ubuntu:24.04`, `debian:12`, `alpine:latest` (musl) |
+| arm64 (QEMU emulation) | `ubuntu:24.04`, `almalinux:9` |
+
+The release job (tarballs, `SHA256SUMS`, GitHub Release, pre-release flag) was verified
+end to end with a throwaway tag `v0.0.0-test.1` (since deleted): the release was marked
+pre-release and had three assets (amd64 and arm64 tarballs plus `SHA256SUMS`), `sha256sum -c`
+passed for both tarballs, and the downloaded amd64 binary printed `v0.0.0-test.1`
+(with the commit, build date and Go version) and was reported as statically linked by `file`.
+
+**CloudLinux was not tested directly.** CloudLinux publishes no public base OS image,
+so CentOS 7 (glibc 2.17) stands in for CloudLinux 7 and AlmaLinux 8/9 for CloudLinux
+8/9. The binary is static, so the kernel and CA bundle matter, not the distribution's libc.
+Not tested on real arm64 hardware or with Chrome installed in these containers.
 
 ## Layout
 
 ```
+.github/workflows/release.yml  build, compatibility tests, GitHub Release
 main.go           CLI, mode orchestration, evidence output
 fetch_http.go     Chrome-impersonating HTTP client
 fetch_browser.go  headless Chrome via CDP

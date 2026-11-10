@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"sync"
@@ -12,9 +13,13 @@ import (
 	"github.com/chromedp/chromedp"
 )
 
-// findChrome returns the Chrome/Chromium binary to use.
+// findChrome returns the Chrome/Chromium binary to use: $CHROME_PATH if set,
+// otherwise the first known binary name found in $PATH.
 func findChrome() (string, error) {
 	if p := os.Getenv("CHROME_PATH"); p != "" {
+		if _, err := exec.LookPath(p); err != nil {
+			return "", fmt.Errorf("CHROME_PATH=%q is not an executable file: %w", p, err)
+		}
 		return p, nil
 	}
 	for _, n := range []string{"google-chrome", "google-chrome-stable", "chromium", "chromium-browser", "chrome"} {
@@ -22,7 +27,15 @@ func findChrome() (string, error) {
 			return p, nil
 		}
 	}
-	return "", errors.New("no Chrome/Chromium binary found (set CHROME_PATH)")
+	return "", errors.New("no Chrome/Chromium binary found: install google-chrome or chromium, or set CHROME_PATH (browser mode needs it; http mode does not)")
+}
+
+// needNoSandbox reports whether Chrome must run with --no-sandbox. Chrome
+// refuses to start as root without it. Otherwise the sandbox stays on; set
+// SIMULATE_BROWSER_NO_SANDBOX=1 for hosts where it cannot start (for example
+// kernels with unprivileged user namespaces disabled).
+func needNoSandbox() bool {
+	return os.Geteuid() == 0 || os.Getenv("SIMULATE_BROWSER_NO_SANDBOX") == "1"
 }
 
 // fetchBrowser loads url in headless Chrome over CDP so JavaScript challenges
@@ -39,7 +52,7 @@ func fetchBrowser(ctx context.Context, url, lang, proxy string, timeout time.Dur
 	flags := append(chromedp.DefaultExecAllocatorOptions[:],
 		chromedp.ExecPath(bin),
 		chromedp.Flag("headless", "new"),
-		chromedp.Flag("no-sandbox", true), // required when running as root in containers
+		chromedp.Flag("no-sandbox", needNoSandbox()),
 		chromedp.Flag("disable-dev-shm-usage", true),
 		chromedp.Flag("disable-blink-features", "AutomationControlled"),
 		chromedp.Flag("lang", lang),
