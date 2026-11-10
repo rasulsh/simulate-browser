@@ -17,15 +17,15 @@ env:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
         goarch: [amd64, arm64]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
 
@@ -74,7 +74,7 @@ jobs:
           tar --owner=0 --group=0 -C dist/stage -czf "dist/simulate-browser_${VERSION}_linux_${GOARCH}.tar.gz" $files
           tar -tzvf "dist/simulate-browser_${VERSION}_linux_${GOARCH}.tar.gz"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: pkg-${{ matrix.goarch }}
           path: dist/*.tar.gz
@@ -83,7 +83,7 @@ jobs:
   # Runs the packaged binary in clean containers that have no Go installed.
   compat:
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
@@ -100,12 +100,12 @@ jobs:
           - { arch: arm64, image: "ubuntu:24.04", prep: "apt-get update -qq && apt-get install -y -qq ca-certificates" }
           - { arch: arm64, image: "almalinux:9" }
     steps:
-      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-qemu-action@v4
         if: matrix.arch == 'arm64'
         with:
           platforms: arm64
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: pkg-${{ matrix.arch }}
           path: pkg
@@ -161,11 +161,11 @@ jobs:
   release:
     if: github.event_name == 'push' && github.ref_type == 'tag'
     needs: [build, compat]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: pkg-*
           path: assets

@@ -102,6 +102,12 @@ Every PR and tag run executes the packaged binary in clean containers (no Go ins
 | amd64 | `centos:7`, `almalinux:8`, `almalinux:9`, `ubuntu:20.04`, `ubuntu:24.04`, `debian:12`, `alpine:latest` (musl) |
 | arm64 (QEMU emulation) | `ubuntu:24.04`, `almalinux:9` |
 
+The release job (tarballs, `SHA256SUMS`, GitHub Release, pre-release flag) was verified
+end to end with a throwaway tag `v0.0.0-test.1` (since deleted): the release was marked
+pre-release and had three assets (amd64 and arm64 tarballs plus `SHA256SUMS`), `sha256sum -c`
+passed for both tarballs, and the downloaded amd64 binary printed `v0.0.0-test.1`
+(with the commit, build date and Go version) and was reported as statically linked by `file`.
+
 **CloudLinux was not tested directly.** CloudLinux publishes no public base OS image,
 so CentOS 7 (glibc 2.17) stands in for CloudLinux 7 and AlmaLinux 8/9 for CloudLinux
 8/9. The binary is static, so the kernel and CA bundle matter, not the distribution's libc.
