@@ -17,28 +17,44 @@ type Result struct {
 	Status   int
 	FinalURL string
 	Body     string
+	client   tls.HttpClient // http mode only: reused (same cookies) for follow-up API calls
 }
 
-const chromeVersion = "152"
+// ---- Chrome profile: the ONLY place that defines the impersonated Chrome. ----
+// To move to another Chrome version, change this block (and bump tls-client if
+// it ships a newer profile). TestChromeProfileConsistent fails if the pieces
+// disagree. See README, "Updating the Chrome profile".
+const chromeMajor = "152"
 
-// chromeUA must match the TLS/HTTP2 profile selected below (Chrome 152).
+var chromeProfile = profiles.Chrome_152
+
 const chromeUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/" +
-	chromeVersion + ".0.0.0 Safari/537.36"
+	chromeMajor + ".0.0.0 Safari/537.36"
 
-// fetchHTTP downloads url with a Chrome-impersonating client: Chrome TLS
-// ClientHello, Chrome HTTP/2 SETTINGS/pseudo-header order and Chrome header
-// order, with a cookie jar and redirect following.
-func fetchHTTP(ctx context.Context, url, lang, proxy string, timeout time.Duration) (*Result, error) {
+const chromeSecChUA = `"Chromium";v="` + chromeMajor + `", "Google Chrome";v="` + chromeMajor + `", "Not/A)Brand";v="24"`
+
+// ---- end of Chrome profile block ----
+
+// newHTTPClient builds the Chrome-impersonating client: Chrome TLS
+// ClientHello, HTTP/2 settings, cookie jar, redirect following.
+func newHTTPClient(proxy string, timeout time.Duration) (tls.HttpClient, error) {
 	opts := []tls.HttpClientOption{
 		tls.WithTimeoutSeconds(int(timeout.Seconds())),
-		tls.WithClientProfile(profiles.Chrome_152),
+		tls.WithClientProfile(chromeProfile),
 		tls.WithCookieJar(tls.NewCookieJar()),
 		tls.WithRandomTLSExtensionOrder(), // Chrome shuffles extensions per connection
 	}
 	if proxy != "" {
 		opts = append(opts, tls.WithProxyUrl(proxy))
 	}
-	client, err := tls.NewHttpClient(tls.NewNoopLogger(), opts...)
+	return tls.NewHttpClient(tls.NewNoopLogger(), opts...)
+}
+
+// fetchHTTP downloads url with a Chrome-impersonating client: Chrome TLS
+// ClientHello, Chrome HTTP/2 SETTINGS/pseudo-header order and Chrome header
+// order, with a cookie jar and redirect following.
+func fetchHTTP(ctx context.Context, url, lang, proxy string, timeout time.Duration) (*Result, error) {
+	client, err := newHTTPClient(proxy, timeout)
 	if err != nil {
 		return nil, fmt.Errorf("create client: %w", err)
 	}
@@ -48,7 +64,7 @@ func fetchHTTP(ctx context.Context, url, lang, proxy string, timeout time.Durati
 		return nil, err
 	}
 	req.Header = http.Header{
-		"sec-ch-ua":                 {`"Chromium";v="` + chromeVersion + `", "Google Chrome";v="` + chromeVersion + `", "Not/A)Brand";v="24"`},
+		"sec-ch-ua":                 {chromeSecChUA},
 		"sec-ch-ua-mobile":          {"?0"},
 		"sec-ch-ua-platform":        {`"Windows"`},
 		"upgrade-insecure-requests": {"1"},
@@ -82,5 +98,5 @@ func fetchHTTP(ctx context.Context, url, lang, proxy string, timeout time.Durati
 	if resp.Request != nil && resp.Request.URL != nil {
 		final = resp.Request.URL.String()
 	}
-	return &Result{Mode: "http", Status: resp.StatusCode, FinalURL: final, Body: string(body)}, nil
+	return &Result{Mode: "http", Status: resp.StatusCode, FinalURL: final, Body: string(body), client: client}, nil
 }

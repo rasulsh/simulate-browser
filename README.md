@@ -29,6 +29,56 @@ toolchain automatically). Requirements to run: see [Releases](#releases);
 `browser` mode needs Chrome or Chromium (`google-chrome`, `chromium`, or `CHROME_PATH`).
 `./simulate-browser --version` prints the build version.
 
+### Torob seller extraction
+
+```bash
+./simulate-browser -url "https://torob.com/p/<id>/<slug>/" -mode http -extract-torob-sellers
+```
+
+With `-extract-torob-sellers`, `-out` is the JSON output path (default
+`sellers.json`) instead of the HTML path; without the flag nothing changes. Exit
+code is 1 for a challenge page or when no seller was extracted, 0 otherwise (also
+when the list is partial: then `complete` is `false` and `warnings` says why).
+`scripts/verify-sellers.sh <url>` runs it in http mode and prints a summary.
+
+**How Torob delivers sellers** (checked against the samples in `testdata/`):
+
+- The page embeds `__NEXT_DATA__`. `props.pageProps.baseProduct.products_info`
+  holds only the first sellers (`result`, 6 of 146 in the samples), the total
+  (`count`) and `sellers_url`, the API the page itself calls.
+- `GET sellers_url` (`api.torob.com/v4/base-product/sellers/`) returns
+  `{"count": N, "results": [...]}` with **all** sellers in one response. There is no
+  pagination and no "show more" request. The extractor calls it through the same
+  Chrome-impersonating client (same cookie jar, `Referer: https://torob.com/`,
+  same-site CORS fetch headers). It only follows a `sellers_url` on
+  `https://api.torob.com`. If the call fails, the embedded 6 sellers are written
+  with `complete: false` and a warning.
+- Prices are integers in **Toman** (`price_text` ends in "تومان"); `currency` is
+  `"toman"`.
+- The first API row can be a promoted repeat (`is_adv`) of an organic row with the
+  same offer id (`prk`). Repeats by `prk` are collapsed (and counted for the
+  `expected_count` comparison, with a warning); distinct offers of the same shop are
+  kept.
+
+```json
+{
+  "url": "...", "fetched_at": "2026-11-11T12:00:00Z", "mode": "http",
+  "product": {"title": "...", "id": "<random_key>"},
+  "currency": "toman",
+  "seller_count": 145, "expected_count": 146, "complete": true,
+  "sellers": [
+    {"name": "...", "price": 3590000, "price_text": "۳٫۵۹۰٫۰۰۰ تومان",
+     "available": true, "city": "تهران", "url": "<offer redirect URL>"}
+  ],
+  "warnings": []
+}
+```
+
+`price` is `null` when the offer is unavailable ("ناموجود", even if the text shows a
+last price) or the text cannot be parsed; `price_text` is always the raw text.
+Missing fields become `null`, never a dropped seller. `expected_count` is Torob's own
+total; `complete` is `false` when the extracted count does not match it.
+
 ## Releases
 
 Releases are built by `.github/workflows/release.yml` (static Linux binaries for
@@ -79,6 +129,11 @@ requirement, so it runs on old and musl-based systems alike.
 - **`http` mode** needs nothing except a CA certificate bundle (`ca-certificates`).
   Debian/Ubuntu container images ship without one; install it
   (`apt-get install ca-certificates`). Full VMs and AlmaLinux/CentOS images have it.
+  The target server therefore needs a CA bundle (package `ca-certificates`). In CI the
+  Ubuntu images get it by a read-only mount of the runner's
+  `/etc/ssl/certs/ca-certificates.crt` instead of `apt-get`, because the distro
+  mirrors were unreachable from the Ubuntu containers (a 5-attempt retry did not
+  help); Debian 12 still installs it with `apt-get`, with a retry.
 - **`browser` mode** needs Chrome or Chromium on the server; it cannot be bundled.
   The tool looks for `google-chrome`, `google-chrome-stable`, `chromium`,
   `chromium-browser` or `chrome` in `$PATH`, or uses `$CHROME_PATH`. Without one,
@@ -118,11 +173,14 @@ Not tested on real arm64 hardware or with Chrome installed in these containers.
 ```
 .github/workflows/release.yml  build, compatibility tests, GitHub Release
 main.go           CLI, mode orchestration, evidence output
-fetch_http.go     Chrome-impersonating HTTP client
+fetch_http.go     Chrome-impersonating HTTP client; the Chrome profile constants
+torob.go          Torob seller extraction (-extract-torob-sellers)
 fetch_browser.go  headless Chrome via CDP
 detect.go         challenge/block detection, <title> extraction
 *_test.go         unit tests + local-server integration tests
+testdata/         real Torob page and sellers-API samples (test fixtures)
 scripts/verify.sh runs all three modes against a URL and prints a summary
+scripts/verify-sellers.sh  runs the seller extraction and prints a summary
 ```
 
 ## Tests
@@ -134,6 +192,29 @@ go test ./...
 Covers challenge detection, auto-mode fallback logic, redirects, cookies,
 Chrome-like request headers, 403 handling, and a JavaScript challenge solved by
 real headless Chrome (skipped if no Chrome is installed).
+
+## Updating the Chrome profile
+
+Does the tool need to match the installed Chrome? **No.** What matters is that the
+pieces agree with each other (User-Agent, `sec-ch-ua*` headers, TLS ClientHello,
+HTTP/2 settings) and that the version is not far behind current stable. Evidence:
+the fingerprint run in [Verification status](#verification-status) showed JA4 and
+the HTTP/2 fingerprint of the `Chrome_152` profile identical to a real Chrome 157;
+only JA3 (extension shuffling) and the User-Agent differ. As of 2026-11-11 the newest
+profile in tls-client (latest release v1.18.0, and its `master`) is `Chrome_152`, so
+the tool stays on 152. Changing only the User-Agent to 157 would make it inconsistent
+with the TLS/HTTP/2 profile, which is worse than being a few versions behind.
+
+When a newer tls-client ships a newer Chrome profile:
+
+1. `go get github.com/bogdanfinn/tls-client@<new version> && go mod tidy`
+2. Edit the one constant block in `fetch_http.go` (`chromeMajor`, `chromeProfile`;
+   `chromeUA` and `chromeSecChUA` derive from `chromeMajor`). Update the GREASE brand
+   in `chromeSecChUA` (`"Not/A)Brand";v="24"`) to what that Chrome version sends.
+3. `go vet ./... && go test ./...` (`TestChromeProfileConsistent` fails if the
+   User-Agent major, `sec-ch-ua` major and profile disagree).
+4. Run `scripts/fingerprint.sh` against a real Chrome reference (see
+   [Fingerprint check](#fingerprint-check)).
 
 ## Verifying against a real site
 
@@ -236,6 +317,18 @@ major version when you can.
   `priority: u=0, i`, as Chrome does on navigations. A re-run after the fix exited 0
   with no MISMATCH (reported by the author; the log was not attached to the PR).
 
+- **Torob seller extraction: live run, single run from one IP (2026-11-11, PR #6
+  head, http mode, run by the author on their own machine).**
+  `scripts/verify-sellers.sh` on the FC 26 PS5 product page: `status=200`,
+  `challenge=false`, 145 sellers extracted, `expected_count` 146 (Torob's own total,
+  which includes one promoted repeat of an offer, collapsed with a warning),
+  `complete=true`, currency toman, exit code 0. First seller همراه رایانه بهسان
+  (3,590,000 toman, available), last seller گوشی شاپ (unavailable, `price=null`).
+  Compared with the real Chrome page: first and last seller match, and the author
+  reports Chrome shows 145 or 146 sellers (the exact figure was not pinned down),
+  consistent with the tool's 145 extracted + 1 collapsed promoted repeat = 146 that
+  Torob reports.
+
 ### Not independently verified
 
 - **Fingerprint: limits of the verification above.**
@@ -245,9 +338,10 @@ major version when you can.
   - Other Chrome versions are untested: the profile is pinned to `Chrome_152`, the
     newest in tls-client v1.18.0, so a Chrome that has moved on may diverge
     (JA4 and HTTP/2 settings do change between Chrome releases).
-- **Price extraction is not checked.** Success means "real page, not a challenge,
-  and price/offer-like content present". The tool does not parse or validate the
-  actual price value.
+- **Price extraction (default mode) is not checked.** Success means "real page, not
+  a challenge, and price/offer-like content present". The tool does not parse or
+  validate the actual price value. (Seller extraction, `-extract-torob-sellers`,
+  parses prices; see its live run above.)
 - **Single run, single IP.** One run from one residential German IP says nothing
   about stability over time, rate limits, or other networks. Challenge behavior
   can change; `auto` mode exists for that reason.

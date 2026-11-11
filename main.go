@@ -24,6 +24,7 @@ type fetcher func(ctx context.Context, url, lang, proxy string, timeout time.Dur
 
 type config struct {
 	url, mode, out, lang, proxy string
+	extractSellers              bool
 	expect                      *regexp.Regexp
 	timeout                     time.Duration
 }
@@ -38,6 +39,7 @@ func main() {
 	flag.StringVar(&c.proxy, "proxy", os.Getenv("HTTPS_PROXY"), "proxy URL (default: $HTTPS_PROXY)")
 	flag.StringVar(&expect, "expect", defaultExpect, "regexp the HTML must match to count as real content")
 	flag.DurationVar(&c.timeout, "timeout", 60*time.Second, "per-strategy timeout")
+	flag.BoolVar(&c.extractSellers, "extract-torob-sellers", false, "extract the Torob seller list as JSON; -out is then the JSON path (default sellers.json)")
 	showVersion := flag.Bool("version", false, "print version information and exit")
 	flag.Parse()
 
@@ -50,6 +52,19 @@ func main() {
 	if c.url == "" || (c.mode != "auto" && c.mode != "http" && c.mode != "browser") {
 		flag.Usage()
 		os.Exit(2)
+	}
+	outSet, expectSet := false, false
+	flag.Visit(func(f *flag.Flag) {
+		outSet = outSet || f.Name == "out"
+		expectSet = expectSet || f.Name == "expect"
+	})
+	if c.extractSellers {
+		if !outSet {
+			c.out = "sellers.json"
+		}
+		if !expectSet {
+			expect = torobExpect
+		}
 	}
 	re, err := regexp.Compile(expect)
 	if err != nil {
@@ -71,6 +86,12 @@ func main() {
 		}
 	}
 
+	if c.extractSellers {
+		if !runExtract(context.Background(), c, fetchHTTP, browserF) {
+			os.Exit(1)
+		}
+		return
+	}
 	if !run(context.Background(), c, fetchHTTP, browserF) {
 		os.Exit(1)
 	}
@@ -79,6 +100,19 @@ func main() {
 // run executes the selected mode(s), saves the HTML and prints evidence.
 // It reports whether the saved page is real content (not a challenge/block page).
 func run(ctx context.Context, c config, httpF, browserF fetcher) bool {
+	res, ok, why := fetchPage(ctx, c, httpF, browserF)
+	if res == nil {
+		fmt.Println("RESULT: FAIL - no strategy returned a response")
+		return false
+	}
+	report(c, res, ok, why)
+	return ok
+}
+
+// fetchPage runs the selected strategies in order and returns the first usable
+// response (ok=true), or the last response with the reason it was rejected.
+// res is nil when no strategy produced a response at all.
+func fetchPage(ctx context.Context, c config, httpF, browserF fetcher) (res *Result, ok bool, why string) {
 	var steps []struct {
 		name string
 		f    fetcher
@@ -103,31 +137,27 @@ func run(ctx context.Context, c config, httpF, browserF fetcher) bool {
 
 	var last *Result
 	for i, s := range steps {
-		res, err := s.f(ctx, c.url, c.lang, c.proxy, c.timeout)
+		r, err := s.f(ctx, c.url, c.lang, c.proxy, c.timeout)
 		if err != nil {
 			fmt.Printf("[%s] error: %v\n", s.name, err)
 			continue
 		}
-		bad, why := isChallenge(res.Status, res.Body)
-		ok := !bad && c.expect.MatchString(res.Body)
-		fmt.Printf("[%s] status=%d size=%d challenge=%v ok=%v\n", s.name, res.Status, len(res.Body), bad, ok)
-		last = res
-		if ok {
-			report(c, res, true, "")
-			return true
+		bad, reason := isChallenge(r.Status, r.Body)
+		good := !bad && c.expect.MatchString(r.Body)
+		fmt.Printf("[%s] status=%d size=%d challenge=%v ok=%v\n", s.name, r.Status, len(r.Body), bad, good)
+		last = r
+		if good {
+			return r, true, ""
 		}
-		reason := failReason(res, bad, why)
 		if i < len(steps)-1 {
-			fmt.Printf("[%s] not usable (%s); falling back\n", s.name, reason)
+			fmt.Printf("[%s] not usable (%s); falling back\n", s.name, failReason(r, bad, reason))
 		}
 	}
 	if last == nil {
-		fmt.Println("RESULT: FAIL - no strategy returned a response")
-		return false
+		return nil, false, ""
 	}
-	bad, why := isChallenge(last.Status, last.Body)
-	report(c, last, false, failReason(last, bad, why))
-	return false
+	bad, reason := isChallenge(last.Status, last.Body)
+	return last, false, failReason(last, bad, reason)
 }
 
 func report(c config, r *Result, ok bool, why string) {

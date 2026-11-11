@@ -92,12 +92,12 @@ jobs:
           - { arch: amd64, image: "centos:7" }
           - { arch: amd64, image: "almalinux:8" }
           - { arch: amd64, image: "almalinux:9" }
-          - { arch: amd64, image: "ubuntu:20.04", prep: "apt-get update -qq && apt-get install -y -qq ca-certificates" }
-          - { arch: amd64, image: "ubuntu:24.04", prep: "apt-get update -qq && apt-get install -y -qq ca-certificates" }
+          - { arch: amd64, image: "ubuntu:20.04", mount_ca: true }
+          - { arch: amd64, image: "ubuntu:24.04", mount_ca: true }
           - { arch: amd64, image: "debian:12", prep: "apt-get update -qq && apt-get install -y -qq ca-certificates" }
           - { arch: amd64, image: "alpine:latest" }
           # arm64 under QEMU emulation.
-          - { arch: arm64, image: "ubuntu:24.04", prep: "apt-get update -qq && apt-get install -y -qq ca-certificates" }
+          - { arch: arm64, image: "ubuntu:24.04", mount_ca: true }
           - { arch: arm64, image: "almalinux:9" }
     steps:
       - uses: docker/setup-qemu-action@v4
@@ -121,7 +121,17 @@ jobs:
           cat > "$RUNNER_TEMP/compat.sh" <<'EOF'
           set -eu
           # PREP (optional) installs ca-certificates on images that ship without a CA bundle.
-          if [ -n "${PREP:-}" ]; then sh -c "$PREP" > /dev/null; fi
+          # Distro mirrors are flaky from CI, so retry up to 5 times with a growing sleep
+          # ("apt-get update" exits 0 on fetch errors, hence the whole PREP is retried).
+          if [ -n "${PREP:-}" ]; then
+            n=1
+            until sh -c "$PREP" > /dev/null; do
+              if [ "$n" -ge 5 ]; then echo "PREP failed after $n attempts"; exit 1; fi
+              echo "PREP attempt $n failed; retrying in $((n * 15))s"
+              sleep $((n * 15))
+              n=$((n + 1))
+            done
+          fi
           head -n 2 /etc/os-release
           for f in /etc/ssl/certs/ca-certificates.crt /etc/pki/tls/certs/ca-bundle.crt; do
             if [ -e "$f" ]; then echo "CA bundle: $f"; fi
@@ -150,10 +160,19 @@ jobs:
       - name: Test in ${{ matrix.image }} (${{ matrix.arch }})
         env:
           PREP: ${{ matrix.prep }}
+          MOUNT_CA: ${{ matrix.mount_ca }}
           EXPECT_VERSION: ${{ env.VERSION }}
         run: |
+          # Ubuntu images: the distro mirrors were unreachable from the containers in CI, so
+          # instead of installing ca-certificates with apt, mount the runner's CA bundle
+          # read-only at the path the binary (Go) reads on Debian/Ubuntu.
+          extra=()
+          if [ "$MOUNT_CA" = "true" ]; then
+            extra+=(-v /etc/ssl/certs/ca-certificates.crt:/etc/ssl/certs/ca-certificates.crt:ro)
+          fi
           docker run --rm --platform "linux/${{ matrix.arch }}" \
             -e PREP -e EXPECT_VERSION \
+            "${extra[@]}" \
             -v "$PWD/bin/simulate-browser:/usr/local/bin/simulate-browser:ro" \
             -v "$RUNNER_TEMP/compat.sh:/compat.sh:ro" \
             "${{ matrix.image }}" sh /compat.sh
