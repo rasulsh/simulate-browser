@@ -29,6 +29,56 @@ toolchain automatically). Requirements to run: see [Releases](#releases);
 `browser` mode needs Chrome or Chromium (`google-chrome`, `chromium`, or `CHROME_PATH`).
 `./simulate-browser --version` prints the build version.
 
+### Torob seller extraction
+
+```bash
+./simulate-browser -url "https://torob.com/p/<id>/<slug>/" -mode http -extract-torob-sellers
+```
+
+With `-extract-torob-sellers`, `-out` is the JSON output path (default
+`sellers.json`) instead of the HTML path; without the flag nothing changes. Exit
+code is 1 for a challenge page or when no seller was extracted, 0 otherwise (also
+when the list is partial: then `complete` is `false` and `warnings` says why).
+`scripts/verify-sellers.sh <url>` runs it in http mode and prints a summary.
+
+**How Torob delivers sellers** (checked against the samples in `testdata/`):
+
+- The page embeds `__NEXT_DATA__`. `props.pageProps.baseProduct.products_info`
+  holds only the first sellers (`result`, 6 of 146 in the samples), the total
+  (`count`) and `sellers_url`, the API the page itself calls.
+- `GET sellers_url` (`api.torob.com/v4/base-product/sellers/`) returns
+  `{"count": N, "results": [...]}` with **all** sellers in one response. There is no
+  pagination and no "show more" request. The extractor calls it through the same
+  Chrome-impersonating client (same cookie jar, `Referer: https://torob.com/`,
+  same-site CORS fetch headers). It only follows a `sellers_url` on
+  `https://api.torob.com`. If the call fails, the embedded 6 sellers are written
+  with `complete: false` and a warning.
+- Prices are integers in **Toman** (`price_text` ends in "تومان"); `currency` is
+  `"toman"`.
+- The first API row can be a promoted repeat (`is_adv`) of an organic row with the
+  same offer id (`prk`). Repeats by `prk` are collapsed (and counted for the
+  `expected_count` comparison, with a warning); distinct offers of the same shop are
+  kept.
+
+```json
+{
+  "url": "...", "fetched_at": "2026-11-11T12:00:00Z", "mode": "http",
+  "product": {"title": "...", "id": "<random_key>"},
+  "currency": "toman",
+  "seller_count": 145, "expected_count": 146, "complete": true,
+  "sellers": [
+    {"name": "...", "price": 3590000, "price_text": "۳٫۵۹۰٫۰۰۰ تومان",
+     "available": true, "city": "تهران", "url": "<offer redirect URL>"}
+  ],
+  "warnings": []
+}
+```
+
+`price` is `null` when the offer is unavailable ("ناموجود", even if the text shows a
+last price) or the text cannot be parsed; `price_text` is always the raw text.
+Missing fields become `null`, never a dropped seller. `expected_count` is Torob's own
+total; `complete` is `false` when the extracted count does not match it.
+
 ## Releases
 
 Releases are built by `.github/workflows/release.yml` (static Linux binaries for
@@ -118,11 +168,14 @@ Not tested on real arm64 hardware or with Chrome installed in these containers.
 ```
 .github/workflows/release.yml  build, compatibility tests, GitHub Release
 main.go           CLI, mode orchestration, evidence output
-fetch_http.go     Chrome-impersonating HTTP client
+fetch_http.go     Chrome-impersonating HTTP client; the Chrome profile constants
+torob.go          Torob seller extraction (-extract-torob-sellers)
 fetch_browser.go  headless Chrome via CDP
 detect.go         challenge/block detection, <title> extraction
 *_test.go         unit tests + local-server integration tests
+testdata/         real Torob page and sellers-API samples (test fixtures)
 scripts/verify.sh runs all three modes against a URL and prints a summary
+scripts/verify-sellers.sh  runs the seller extraction and prints a summary
 ```
 
 ## Tests
@@ -134,6 +187,29 @@ go test ./...
 Covers challenge detection, auto-mode fallback logic, redirects, cookies,
 Chrome-like request headers, 403 handling, and a JavaScript challenge solved by
 real headless Chrome (skipped if no Chrome is installed).
+
+## Updating the Chrome profile
+
+Does the tool need to match the installed Chrome? **No.** What matters is that the
+pieces agree with each other (User-Agent, `sec-ch-ua*` headers, TLS ClientHello,
+HTTP/2 settings) and that the version is not far behind current stable. Evidence:
+the fingerprint run in [Verification status](#verification-status) showed JA4 and
+the HTTP/2 fingerprint of the `Chrome_152` profile identical to a real Chrome 157;
+only JA3 (extension shuffling) and the User-Agent differ. As of 2026-11-11 the newest
+profile in tls-client (latest release v1.18.0, and its `master`) is `Chrome_152`, so
+the tool stays on 152. Changing only the User-Agent to 157 would make it inconsistent
+with the TLS/HTTP/2 profile, which is worse than being a few versions behind.
+
+When a newer tls-client ships a newer Chrome profile:
+
+1. `go get github.com/bogdanfinn/tls-client@<new version> && go mod tidy`
+2. Edit the one constant block in `fetch_http.go` (`chromeMajor`, `chromeProfile`;
+   `chromeUA` and `chromeSecChUA` derive from `chromeMajor`). Update the GREASE brand
+   in `chromeSecChUA` (`"Not/A)Brand";v="24"`) to what that Chrome version sends.
+3. `go vet ./... && go test ./...` (`TestChromeProfileConsistent` fails if the
+   User-Agent major, `sec-ch-ua` major and profile disagree).
+4. Run `scripts/fingerprint.sh` against a real Chrome reference (see
+   [Fingerprint check](#fingerprint-check)).
 
 ## Verifying against a real site
 
