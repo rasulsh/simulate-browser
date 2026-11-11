@@ -312,6 +312,17 @@ major version when you can.
   `priority: u=0, i`, as Chrome does on navigations. A re-run after the fix exited 0
   with no MISMATCH (reported by the author; the log was not attached to the PR).
 
+- **Torob seller extraction: live run, single run from one IP (2026-11-11, PR #6
+  head, http mode, run by the author on their own machine).**
+  `scripts/verify-sellers.sh` on the FC 26 PS5 product page: `status=200`,
+  `challenge=false`, 145 sellers extracted, `expected_count` 146 (Torob's own total,
+  which includes one promoted repeat of an offer, collapsed with a warning),
+  `complete=true`, currency toman, exit code 0. First seller همراه رایانه بهسان
+  (3,590,000 toman, available), last seller گوشی شاپ (unavailable, `price=null`).
+  Compared with the real Chrome page: first and last seller match. The seller total
+  shown in Chrome was not recorded, so the count itself was only checked against
+  Torob's own `count` field, not against what Chrome displays.
+
 ### Not independently verified
 
 - **Fingerprint: limits of the verification above.**
@@ -321,9 +332,10 @@ major version when you can.
   - Other Chrome versions are untested: the profile is pinned to `Chrome_152`, the
     newest in tls-client v1.18.0, so a Chrome that has moved on may diverge
     (JA4 and HTTP/2 settings do change between Chrome releases).
-- **Price extraction is not checked.** Success means "real page, not a challenge,
-  and price/offer-like content present". The tool does not parse or validate the
-  actual price value.
+- **Price extraction (default mode) is not checked.** Success means "real page, not
+  a challenge, and price/offer-like content present". The tool does not parse or
+  validate the actual price value. (Seller extraction, `-extract-torob-sellers`,
+  parses prices; see its live run above.)
 - **Single run, single IP.** One run from one residential German IP says nothing
   about stability over time, rate limits, or other networks. Challenge behavior
   can change; `auto` mode exists for that reason.
