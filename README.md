@@ -129,6 +129,11 @@ requirement, so it runs on old and musl-based systems alike.
 - **`http` mode** needs nothing except a CA certificate bundle (`ca-certificates`).
   Debian/Ubuntu container images ship without one; install it
   (`apt-get install ca-certificates`). Full VMs and AlmaLinux/CentOS images have it.
+  The target server therefore needs a CA bundle (package `ca-certificates`). In CI the
+  Ubuntu images get it by a read-only mount of the runner's
+  `/etc/ssl/certs/ca-certificates.crt` instead of `apt-get`, because the distro
+  mirrors were unreachable from the Ubuntu containers (a 5-attempt retry did not
+  help); Debian 12 still installs it with `apt-get`, with a retry.
 - **`browser` mode** needs Chrome or Chromium on the server; it cannot be bundled.
   The tool looks for `google-chrome`, `google-chrome-stable`, `chromium`,
   `chromium-browser` or `chrome` in `$PATH`, or uses `$CHROME_PATH`. Without one,
