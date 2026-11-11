@@ -324,9 +324,10 @@ major version when you can.
   which includes one promoted repeat of an offer, collapsed with a warning),
   `complete=true`, currency toman, exit code 0. First seller همراه رایانه بهسان
   (3,590,000 toman, available), last seller گوشی شاپ (unavailable, `price=null`).
-  Compared with the real Chrome page: first and last seller match. The seller total
-  shown in Chrome was not recorded, so the count itself was only checked against
-  Torob's own `count` field, not against what Chrome displays.
+  Compared with the real Chrome page: first and last seller match, and the author
+  reports Chrome shows 145 or 146 sellers (the exact figure was not pinned down),
+  consistent with the tool's 145 extracted + 1 collapsed promoted repeat = 146 that
+  Torob reports.
 
 ### Not independently verified
 
